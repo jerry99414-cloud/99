@@ -13,7 +13,6 @@ import { Plus, Trash2, FileDown, Loader2, CheckCircle2, RotateCcw } from "lucide
 import {
   INSPECTION_ITEMS,
   itemsForCategory,
-  DEFAULT_NOTICE,
   type CategoryKey,
 } from "@/lib/inspection-content";
 import {
@@ -62,11 +61,13 @@ function GroupCard({
   groupLabel,
   type,
   group,
+  globalCheckedKeys,
   onChange,
 }: {
   groupLabel: string;
   type: GroupType;
   group: GroupData;
+  globalCheckedKeys: Set<string>;
   onChange: (next: GroupData) => void;
 }) {
   const category: CategoryKey = TYPE_TO_CATEGORY[type];
@@ -113,6 +114,7 @@ function GroupCard({
         <div className="space-y-1.5 max-h-72 overflow-auto rounded-md border bg-background p-2">
           {items.map((item) => {
             const id = `${groupLabel}-${half}-${item.shortKey}`;
+            const isCheckedGlobally = globalCheckedKeys.has(item.shortKey);
             return (
               <label
                 key={id}
@@ -125,9 +127,18 @@ function GroupCard({
                   onCheckedChange={(c) =>
                     toggleKey(item.shortKey, c === true)
                   }
-                  className="mt-0.5"
+                  className="mt-0.5 shrink-0"
                 />
-                <span>{item.fullLabel}</span>
+                <span className="flex-1 min-w-0">{item.fullLabel}</span>
+                {isCheckedGlobally ? (
+                  <span className="shrink-0 text-xs font-medium text-green-600 whitespace-nowrap">
+                    ✅ 已勾選
+                  </span>
+                ) : (
+                  <span className="shrink-0 text-xs text-muted-foreground whitespace-nowrap">
+                    ⬜ 未勾選
+                  </span>
+                )}
               </label>
             );
           })}
@@ -204,11 +215,13 @@ function DayCard({
   day,
   dayIndex,
   runningStart,
+  globalCheckedKeys,
   onChange,
 }: {
   day: DayState;
   dayIndex: number;
   runningStart: { mech: number; elev: number; fire: number };
+  globalCheckedKeys: Set<string>;
   onChange: (next: DayState) => void;
 }) {
   const updateCount = (type: GroupType, count: number) => {
@@ -265,8 +278,7 @@ function DayCard({
           <div className="space-y-1.5">
             <Label>日期</Label>
             <Input
-              type="text"
-              placeholder="例如：5/4 (一)"
+              type="date"
               value={day.date}
               onChange={(e) => onChange({ ...day, date: e.target.value })}
             />
@@ -322,6 +334,7 @@ function DayCard({
                 type={type}
                 groupLabel={buildLabel(type, start + idx + 1)}
                 group={g}
+                globalCheckedKeys={globalCheckedKeys}
                 onChange={(next) => updateGroup(type, idx, next)}
               />
             ));
@@ -330,25 +343,14 @@ function DayCard({
 
         <Separator />
 
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label>備註</Label>
-            <Textarea
-              value={day.note}
-              onChange={(e) => onChange({ ...day, note: e.target.value })}
-              placeholder="此處內容會輸出在備註區"
-              rows={4}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label>注意事項</Label>
-            <Textarea
-              value={day.notice}
-              onChange={(e) => onChange({ ...day, notice: e.target.value })}
-              placeholder="此處內容會輸出在注意事項區（每行一條）"
-              rows={4}
-            />
-          </div>
+        <div className="space-y-1.5">
+          <Label>備註</Label>
+          <Textarea
+            value={day.note}
+            onChange={(e) => onChange({ ...day, note: e.target.value })}
+            placeholder="此處內容會輸出在備註區"
+            rows={4}
+          />
         </div>
       </CardContent>
     </Card>
@@ -358,9 +360,7 @@ function DayCard({
 function adjustDays(arr: DayState[], count: number): DayState[] {
   const next = arr.slice(0, count);
   while (next.length < count) {
-    const blank = emptyDay();
-    blank.notice = DEFAULT_NOTICE;
-    next.push(blank);
+    next.push(emptyDay());
   }
   return next;
 }
@@ -376,18 +376,12 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function makeInitialDay(): DayState {
-  const d = emptyDay();
-  d.notice = DEFAULT_NOTICE;
-  return d;
-}
-
 export default function InspectionForm() {
   const [projectName, setProjectName] = useState("英倫公園");
   const [region, setRegion] = useState<"north" | "south">("north");
   const [isUnpublished, setIsUnpublished] = useState(false);
   const [totalDays, setTotalDays] = useState(1);
-  const [days, setDays] = useState<DayState[]>(() => [makeInitialDay()]);
+  const [days, setDays] = useState<DayState[]>(() => [emptyDay()]);
   const [generating, setGenerating] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
@@ -403,6 +397,21 @@ export default function InspectionForm() {
       fire += d.fireGroups.length;
       return start;
     });
+  }, [days]);
+
+  const allCheckedKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const day of days) {
+      for (const g of [
+        ...day.mechGroups,
+        ...day.elevGroups,
+        ...day.fireGroups,
+      ]) {
+        g.morningKeys.forEach((k) => s.add(k));
+        g.afternoonKeys.forEach((k) => s.add(k));
+      }
+    }
+    return s;
   }, [days]);
 
   const request = useMemo(
@@ -462,7 +471,7 @@ export default function InspectionForm() {
     setRegion("north");
     setIsUnpublished(false);
     setTotalDays(1);
-    setDays([makeInitialDay()]);
+    setDays([emptyDay()]);
     setDownloadSuccess(false);
     setErrorMsg(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -615,6 +624,7 @@ export default function InspectionForm() {
             day={d}
             dayIndex={i}
             runningStart={runningStarts[i] ?? { mech: 0, elev: 0, fire: 0 }}
+            globalCheckedKeys={allCheckedKeys}
             onChange={(next) => updateDay(i, next)}
           />
         ))}

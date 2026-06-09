@@ -16,6 +16,7 @@ import {
 } from "docx";
 import {
   ITEM_BY_SHORT_KEY,
+  INSPECTION_ITEMS,
   PEOPLE_MAPPING,
   dedupePreserveOrder,
 } from "./data";
@@ -38,21 +39,85 @@ const BORDER = {
   right: { style: BorderStyle.SINGLE, size: 4, color: "000000" },
 };
 
+// ---------- Sort index (master list order) ----------
+
+const SORT_INDEX = new Map<string, number>(
+  INSPECTION_ITEMS.map((item, i) => [item.shortKey, i]),
+);
+
+function sortContents(
+  contents: InspectionContentEntry[],
+): InspectionContentEntry[] {
+  return [...contents].sort((a, b) => {
+    const ia =
+      a.shortKey != null ? (SORT_INDEX.get(a.shortKey) ?? Infinity) : Infinity;
+    const ib =
+      b.shortKey != null ? (SORT_INDEX.get(b.shortKey) ?? Infinity) : Infinity;
+    return ia - ib;
+  });
+}
+
+// ---------- Date formatting ----------
+
+function formatDate(dateStr: string): string {
+  const parts = dateStr.split("-");
+  if (parts.length === 3) {
+    const m = parseInt(parts[1] ?? "", 10);
+    const d = parseInt(parts[2] ?? "", 10);
+    if (!isNaN(m) && !isNaN(d)) return `${m}/${d}`;
+  }
+  return dateStr;
+}
+
+// ---------- Notice text ----------
+
+const NOTICE_FULL: string[] = [
+  "1. 發電機功能測試(ATS斷電測試)公設區域停電需提前公告，預計於上午9點30分開始斷電測試，測試時間約為１個小時，測試時間會因現場檢驗缺失狀況有所增減調整。",
+  "2. 電梯昇降設備配合發電機測試時電梯管制及開放時間需提前公告，預計於上午9點30分前管制完成，管制時間約為１個小時，管制時間會因現場檢驗缺失狀況有所增減調整。",
+  "3. 消防設備測試時會發出警報聲響,泡沫放射區域淨空，需提前公告告知住戶。",
+  "4. 以上項目當天測試設備前會全棟廣播通知。",
+  "5. 請提前通知各系統設備廠商當天務必到場配合檢驗。",
+  "6. 當天檢驗前請先將所有機房門扇、往屋突頂樓人孔蓋及屋頂、地下室水箱蓋全部開啟。",
+  "7. 空調系統檢驗天花板內設備請廠商先備妥符合勞安規定之上下設備(如施工架、高空作業車…等)。",
+];
+
+const NOTICE_SIMPLE: string[] = [
+  "1. 請提前通知各系統設備廠商當天務必到場配合檢驗。",
+  "2. 以上項目當天測試設備前會全棟廣播通知。",
+  "3. 當天檢驗前請先將所有機房門扇、往屋突頂樓人孔蓋及屋頂、地下室水箱蓋全部開啟。",
+  "4. 消防設備測試時會發出警報聲響，需提前公告告知住戶。",
+];
+
+const NOTICE_DRAINAGE =
+  "排水系統各樓層落水頭試水檢驗請廠商先備妥試水設備(如水桶&手推車或水管….等)。";
+
+const DRAINAGE_KEYWORDS = ["排水", "污水", "廢水", "落水頭"];
+
+// ---------- Types ----------
+
 type AlignmentValue = (typeof AlignmentType)[keyof typeof AlignmentType];
-type VerticalMergeValue = (typeof VerticalMergeType)[keyof typeof VerticalMergeType];
+type VerticalMergeValue =
+  (typeof VerticalMergeType)[keyof typeof VerticalMergeType];
 
 interface CellOpts {
   text?: string;
   bullets?: string[];
+  paragraphs?: Paragraph[];
   width: number;
   colSpan?: number;
   align?: AlignmentValue;
   verticalMerge?: VerticalMergeValue;
 }
 
-function makeText(text: string, align: AlignmentValue = AlignmentType.CENTER): Paragraph {
+// ---------- Paragraph builders ----------
+
+function makeText(
+  text: string,
+  align: AlignmentValue = AlignmentType.CENTER,
+): Paragraph {
   return new Paragraph({
     alignment: align,
+    spacing: { before: 0, after: 0 },
     children: [
       new TextRun({
         text,
@@ -68,7 +133,7 @@ function makeBulletParagraph(label: string): Paragraph {
   return new Paragraph({
     alignment: AlignmentType.LEFT,
     spacing: { before: 0, after: 0 },
-    indent: { left: 360, hanging: 360 },
+    indent: { left: 255, hanging: 255 },
     children: [
       new TextRun({
         text: `● ${label}`,
@@ -82,14 +147,17 @@ function makeBulletParagraph(label: string): Paragraph {
 
 function makeCell(opts: CellOpts): TableCell {
   let paragraphs: Paragraph[];
-  if (opts.bullets && opts.bullets.length > 0) {
+  if (opts.paragraphs && opts.paragraphs.length > 0) {
+    paragraphs = opts.paragraphs;
+  } else if (opts.bullets && opts.bullets.length > 0) {
     paragraphs = opts.bullets.map((b) => makeBulletParagraph(b));
   } else {
     const text = opts.text ?? "";
     const align = opts.align ?? AlignmentType.CENTER;
-    paragraphs = text === ""
-      ? [makeText("", align)]
-      : text.split("\n").map((line) => makeText(line, align));
+    paragraphs =
+      text === ""
+        ? [makeText("", align)]
+        : text.split("\n").map((line) => makeText(line, align));
   }
 
   return new TableCell({
@@ -101,6 +169,8 @@ function makeCell(opts: CellOpts): TableCell {
     children: paragraphs,
   });
 }
+
+// ---------- People mapping ----------
 
 function autoPeopleFor(contents: InspectionContentEntry[]): string[] {
   const acc: string[] = [];
@@ -118,6 +188,8 @@ function buildPeopleText(
 ): string {
   return dedupePreserveOrder([...autoPeopleFor(contents), ...extra]).join("\n");
 }
+
+// ---------- Group rendering ----------
 
 interface RenderedGroup {
   group: string;
@@ -138,27 +210,39 @@ function renderGroups(
         ? g.morningExtraPeople ?? []
         : g.afternoonExtraPeople ?? [];
     if (!contents || contents.length === 0) continue;
+    const sorted = sortContents(contents);
     out.push({
       group: g.groupLabel,
-      contentItems: contents.map((c) => c.fullLabel),
-      people: buildPeopleText(contents, extras),
+      contentItems: sorted.map((c) => c.fullLabel),
+      people: buildPeopleText(sorted, extras),
     });
   }
   return out;
 }
 
+function hasDrainageInRendered(groups: RenderedGroup[]): boolean {
+  for (const g of groups) {
+    if (
+      g.contentItems.some((label) =>
+        DRAINAGE_KEYWORDS.some((k) => label.includes(k)),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---------- Region times ----------
+
 function getTimes(region: "north" | "south") {
   if (region === "north") {
-    return {
-      briefing_time: "09:00~09:10",
-      morning_time: "09:10~12:00",
-    };
+    return { briefing_time: "09:00~09:10", morning_time: "09:10~12:00" };
   }
-  return {
-    briefing_time: "09:20~09:30",
-    morning_time: "09:30~12:00",
-  };
+  return { briefing_time: "09:20~09:30", morning_time: "09:30~12:00" };
 }
+
+// ---------- computeUnInspected ----------
 
 export interface UnInspectedSummary {
   shortKeys: string[];
@@ -189,7 +273,7 @@ export function computeUnInspected(req: InspectionRequest): UnInspectedSummary {
 
 interface DayBuildContext {
   projectName: string;
-  dayIndex: number;
+  dayIndex: number; // 1-based
   versionText: string;
   date: string;
   briefingTime: string;
@@ -198,7 +282,7 @@ interface DayBuildContext {
   morningGroups: RenderedGroup[];
   afternoonGroups: RenderedGroup[];
   note: string;
-  notice: string;
+  isUnpublished: boolean;
 }
 
 function makeTitleRow(ctx: DayBuildContext): TableRow {
@@ -295,7 +379,7 @@ function makeDataRows(ctx: DayBuildContext): TableRow[] {
     );
   }
 
-  // Lunch row -> "中午" single cell (no vertical merge)
+  // Lunch row
   rows.push(
     new TableRow({
       children: [
@@ -311,7 +395,7 @@ function makeDataRows(ctx: DayBuildContext): TableRow[] {
     }),
   );
 
-  // Afternoon groups -> "下午" RESTART on first iteration; CONTINUE on the rest
+  // Afternoon groups -> "下午" RESTART on first, CONTINUE on rest
   let afternoonRestartUsed = false;
   for (const g of ctx.afternoonGroups) {
     const merge: VerticalMergeValue = afternoonRestartUsed
@@ -341,7 +425,7 @@ function makeDataRows(ctx: DayBuildContext): TableRow[] {
     );
   }
 
-  // Meeting row -> "下午" RESTART (if no afternoon groups) else CONTINUE
+  // Meeting row
   rows.push(
     new TableRow({
       children: [
@@ -371,20 +455,64 @@ function makeDataRows(ctx: DayBuildContext): TableRow[] {
   return rows;
 }
 
-function makeNotesRow(note: string, notice: string): TableRow {
-  const lines = [
-    "備註：實際檢驗時間因檢驗缺失狀況調整",
-    note,
-    "各項設備測試注意事項：",
-    notice,
-  ]
-    .filter((s) => s !== undefined && s !== null)
-    .join("\n");
+// ---------- Notes row (auto-generated) ----------
 
+function buildNotesParas(ctx: DayBuildContext): Paragraph[] {
+  const paras: Paragraph[] = [];
+
+  paras.push(
+    makeText("備註：實際檢驗時間因檢驗缺失狀況調整", AlignmentType.LEFT),
+  );
+  if (ctx.note) {
+    ctx.note
+      .split("\n")
+      .filter(Boolean)
+      .forEach((l) => paras.push(makeText(l, AlignmentType.LEFT)));
+  }
+
+  paras.push(makeText("各項設備測試注意事項：", AlignmentType.LEFT));
+
+  const baseNotices = ctx.dayIndex === 1 ? NOTICE_FULL : NOTICE_SIMPLE;
+  baseNotices.forEach((text) =>
+    paras.push(makeText(text, AlignmentType.LEFT)),
+  );
+
+  const hasDrainage =
+    hasDrainageInRendered(ctx.morningGroups) ||
+    hasDrainageInRendered(ctx.afternoonGroups);
+  if (hasDrainage) {
+    const nextNum = baseNotices.length + 1;
+    paras.push(
+      makeText(`${nextNum}. ${NOTICE_DRAINAGE}`, AlignmentType.LEFT),
+    );
+  }
+
+  if (ctx.isUnpublished) {
+    paras.push(
+      new Paragraph({
+        alignment: AlignmentType.LEFT,
+        spacing: { before: 0, after: 0 },
+        children: [
+          new TextRun({
+            text: "此時程為預定排程，實際行程依初勘調整為準",
+            font: FONT,
+            size: FONT_SIZE,
+            bold: true,
+            color: "FF0000",
+          }),
+        ],
+      }),
+    );
+  }
+
+  return paras;
+}
+
+function makeNotesRow(ctx: DayBuildContext): TableRow {
   return new TableRow({
     children: [
       makeCell({
-        text: lines,
+        paragraphs: buildNotesParas(ctx),
         width: TOTAL_WIDTH,
         colSpan: 6,
         align: AlignmentType.LEFT,
@@ -398,7 +526,7 @@ function buildDayTable(ctx: DayBuildContext): Table {
     makeTitleRow(ctx),
     makeHeaderRow(),
     ...makeDataRows(ctx),
-    makeNotesRow(ctx.note, ctx.notice),
+    makeNotesRow(ctx),
   ];
 
   return new Table({
@@ -417,31 +545,27 @@ export async function generateInspectionDocx(
   const children: (Table | Paragraph)[] = [];
 
   req.days.forEach((d, idx) => {
+    const morningGroups = renderGroups(d.groups, "morning");
+    const afternoonGroups = renderGroups(d.groups, "afternoon");
+
     const ctx: DayBuildContext = {
       projectName: req.projectName,
       dayIndex: idx + 1,
       versionText,
-      date: d.date,
+      date: formatDate(d.date),
       briefingTime: times.briefing_time,
       morningTime: times.morning_time,
       meetingTime: "16:40~17:00",
-      morningGroups: renderGroups(d.groups, "morning"),
-      afternoonGroups: renderGroups(d.groups, "afternoon"),
+      morningGroups,
+      afternoonGroups,
       note: d.note ?? "",
-      notice: d.notice ?? "",
+      isUnpublished: req.isUnpublished,
     };
 
     children.push(buildDayTable(ctx));
 
-    // Page break between days (not after the last day)
     if (idx < req.days.length - 1) {
-      children.push(
-        new Paragraph({
-          children: [
-            new PageBreak(),
-          ],
-        }),
-      );
+      children.push(new Paragraph({ children: [new PageBreak()] }));
     }
   });
 
@@ -449,11 +573,7 @@ export async function generateInspectionDocx(
     styles: {
       default: {
         document: {
-          run: {
-            font: FONT,
-            size: FONT_SIZE,
-            bold: true,
-          },
+          run: { font: FONT, size: FONT_SIZE, bold: true },
         },
       },
     },
@@ -480,6 +600,5 @@ export async function generateInspectionDocx(
     ],
   });
 
-  const buffer = await Packer.toBuffer(doc);
-  return buffer;
+  return Packer.toBuffer(doc);
 }
