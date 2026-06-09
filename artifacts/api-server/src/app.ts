@@ -13,7 +13,7 @@ const __dirname = path.dirname(__filename);
 
 // Render 上 dist/index.mjs 位置在 artifacts/api-server/dist
 // 前端 build 後位置在 artifacts/inspection-schedule/dist
-const frontendDistPath = path.resolve(__dirname, "../../inspection-schedule/dist");
+const frontendDistPath = path.resolve(__dirname, "../../inspection-schedule/dist/public");
 
 app.use(
   pinoHttp({
