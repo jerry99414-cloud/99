@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "機電消防公設檢驗時間表產生器"
+version = "1.0.0"
+id = "artifacts/inspection-schedule"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21664
+
+[services.development]
+run = "pnpm --filter @workspace/inspection-schedule run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/inspection-schedule", "run", "build" ]
+publicDir = "artifacts/inspection-schedule/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21664"
+BASE_PATH = "/"
